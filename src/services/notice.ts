@@ -9,7 +9,12 @@ type ScrapeParams = AuthCredantials & {
 
 export async function scrapeNotices(params: ScrapeParams) {
     const { rollNo, password, securityAnswers } = params;
-    const session = new ErpSession(rollNo, password, securityAnswers);
+    const session = new ErpSession(
+        rollNo,
+        password,
+        securityAnswers,
+        params.ENV
+    );
     await session.init();
     await session.login();
 

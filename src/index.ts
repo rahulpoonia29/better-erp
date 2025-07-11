@@ -15,8 +15,6 @@ app.get("/", (c) => {
     return c.text("Hello Hono!");
 });
 
-
-
 app.post(
     "/scrape-notices",
     zValidator("json", AuthCredantialsSchema),
