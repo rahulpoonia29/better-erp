@@ -94,4 +94,35 @@ app.post(
     }
 );
 
+app.get("/otp/:rollNo", async (c) => {
+    const rollNo = c.req.param("rollNo");
+    const requestedAt = c.req.query("requestedAt");
+
+    console.log("Requested OTP for rollNo:", rollNo, "at", requestedAt);
+
+    if (!requestedAt) {
+        return c.json({ message: "requestedAt query param required" }, 400);
+    }
+
+    const row = await c.env.DB.prepare(
+        `
+    SELECT otp, created_at FROM otps
+    WHERE roll_no = ? AND created_at > ?
+    ORDER BY created_at ASC
+    LIMIT 1
+  `
+    )
+        .bind(rollNo, requestedAt)
+        .first();
+
+    console.log("OTP row found:", row);
+
+    if (!row) {
+        console.log("No OTP found for rollNo:", rollNo);
+        return c.json({ message: "No OTP found yet" }, 404);
+    }
+
+    return c.json({ otp: row.otp, createdAt: row.created_at });
+});
+
 export default app;
