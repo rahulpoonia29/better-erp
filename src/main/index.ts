@@ -17,7 +17,13 @@ app.get("/notices", async (c) => {
         // Validate date format using regex: DD-MM-YYYY HH:MM
         const dateRegex = /^\d{2}-\d{2}-\d{4} \d{2}:\d{2}$/;
         if (!dateRegex.test(since)) {
-            return c.json({ message: "Invalid 'since' date format. Expected DD-MM-YYYY HH:MM" }, 400);
+            return c.json(
+                {
+                    message:
+                        "Invalid 'since' date format. Expected DD-MM-YYYY HH:MM",
+                },
+                400
+            );
         }
 
         if (limit <= 0) {
@@ -43,61 +49,67 @@ app.post(
     "/scrape-notices",
     zValidator("json", AuthCredantialsSchema),
     async (c) => {
+        const data = c.req.valid("json");
+
+        // Verify Authorization header
+        const authHeader = c.req.header("Authorization");
+        if (!authHeader?.startsWith("Bearer ")) {
+            return c.json(
+                {
+                    message:
+                        "Unauthorized: Missing or invalid Authorization header",
+                },
+                401
+            );
+        }
+
+        const apiKey = authHeader.slice(7); // remove "Bearer "
+        if (apiKey !== c.env.API_KEY) {
+            return c.json({ message: "Forbidden: Invalid API key" }, 403);
+        }
+
+        if (!c.env.SCRAPER_API_URL) {
+            return c.json(
+                { message: "Server error: SCRAPER_API_URL not configured" },
+                500
+            );
+        }
+
+        // Get last notice timestamp
+        const dbRes = await c.env.DB.prepare(
+            `SELECT MAX(notice_at) AS lastNoticeAt FROM notices`
+        ).first<{ lastNoticeAt: string | null }>();
+
+        const lastNoticeAt = dbRes?.lastNoticeAt ?? "01-01-2023 00:00";
+        console.log("Last notice date:", lastNoticeAt);
+
+        // Trigger the scraper
         try {
-            const data = c.req.valid("json");
-
-            // Security: Check API key in Authorization header
-            const authHeader = c.req.header("Authorization");
-            if (!authHeader || !authHeader.startsWith("Bearer ")) {
-                return c.json(
-                    { message: "Missing or invalid Authorization header" },
-                    401
-                );
-            }
-
-            const apiKey = authHeader.replace("Bearer ", "");
-            if (!apiKey || apiKey !== c.env.API_KEY) {
-                return c.json({ message: "Invalid API key" }, 403);
-            }
-
-            const res = await c.env.DB.prepare(
-                `SELECT MAX(notice_at) as lastNoticeAt FROM notices`
-            ).first<{ lastNoticeAt: string | null }>();
-
-            console.log("Last notice date:", res?.lastNoticeAt);
-
-            const lastNoticeAt = res?.lastNoticeAt || "01-01-2023 00:00";
-
-            if (!c.env.SCRAPER_API_URL) {
-                return c.json({ message: "SCRAPER_API_URL not configured" }, 500);
-            }
-
-            // Trigger the scraper by calling its API
-            await axios.post<{
-                message: string;
-
-            }>(
+            const response = await axios.post<{ message: string }>(
                 `${c.env.SCRAPER_API_URL}/scrape-notices`,
                 {
                     ...data,
-                    lastKnownNoticeAt: lastNoticeAt,
+                    lastNoticeAt,
                 },
                 {
                     headers: { "Content-Type": "application/json" },
                 }
-            ).then((res) => res.data).catch((error) => {
-                console.error("Error calling scraper API:", error);
-                throw new Error("Failed to trigger scraper API");
-            })
+            );
 
             return c.json({
-                message: "Scraper triggered successfully",
+                message:
+                    response.data.message || "Scraper triggered successfully",
                 lastNoticeAt,
             });
-        } catch (error) {
-            console.error("Error in scrape-notices endpoint:", error);
-            const errorMessage = error instanceof Error ? error.message : String(error);
-            return c.json({ message: "Internal server error", errorMessage }, 500);
+        } catch (err) {
+            console.error("Error calling scraper API:", err);
+            return c.json(
+                {
+                    message: "Failed to trigger scraper API",
+                    error: err instanceof Error ? err.message : String(err),
+                },
+                502 // bad gateway because downstream failed
+            );
         }
     }
 );
@@ -109,7 +121,11 @@ app.post(
         try {
             const notices = c.req.valid("json");
 
-            console.log("Received notices webhook with", notices.length, "notices");
+            console.log(
+                "Received notices webhook with",
+                notices.length,
+                "notices"
+            );
 
             if (!notices || notices.length === 0) {
                 return c.json({ message: "No notices provided" }, 400);
