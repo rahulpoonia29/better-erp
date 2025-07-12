@@ -4,8 +4,8 @@ import {
     type BrowserContext,
     type Page,
 } from "playwright";
-import { getOTPWithBackoff } from "../utils/getOTP.js";
 import type { Env } from "../types/hono.js";
+import { getOTPWithBackoff } from "../utils/getOTP.js";
 
 const ERP_URL = process.env.ERP_URL || "https://erp.iitkgp.ac.in";
 
@@ -59,12 +59,12 @@ export class ErpSession {
         await page.fill("#answer", answer);
         await page.click("#getotp");
 
-        // ! Fix it with OTP fetching
-
-        const otp = await getOTPWithBackoff(this.ENV.CLOUDFLARE_KV_URL, {
-            "X-Auth-Email": this.ENV.CLOUDFLARE_AUTH_EMAIL,
-            "X-Auth-Key": this.ENV.CLOUDFLARE_AUTH_KEY,
-        });
+        const otp = await getOTPWithBackoff(
+            this.ENV.OTP_API_URL,
+            this.rollNo,
+            5,
+            2000
+        );
 
         await page.fill("#email_otp1", otp);
         await page.click("#loginFormSubmitButton");
