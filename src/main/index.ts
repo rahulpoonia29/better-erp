@@ -3,22 +3,28 @@ import { NoticeSchema, type Notice } from "../types/notice.js";
 import { zValidator } from "@hono/zod-validator";
 import z from "zod";
 import { AuthCredantialsSchema } from "../types/session.js";
+import axios from "axios";
 
 const app = new Hono<{ Bindings: CloudflareBindings }>();
 
 app.get("/notices", async (c) => {
     try {
-        const since = c.req.query("since") || "1970-01-01T00:00:00Z";
-        const limit = Math.min(parseInt(c.req.query("limit") || "50", 10), 1000); // Cap at 1000
+        const since = c.req.query("since") || "01-01-2023 00:00";
+        console.log("Fetching notices since:", since);
 
-        // Validate date format
-        if (isNaN(Date.parse(since))) {
-            return c.json({ message: "Invalid 'since' date format" }, 400);
+        const limit = Math.min(parseInt(c.req.query("limit") || "50", 10), 100); // Cap at 100
+
+        // Validate date format using regex: DD-MM-YYYY HH:MM
+        const dateRegex = /^\d{2}-\d{2}-\d{4} \d{2}:\d{2}$/;
+        if (!dateRegex.test(since)) {
+            return c.json({ message: "Invalid 'since' date format. Expected DD-MM-YYYY HH:MM" }, 400);
         }
 
         if (limit <= 0) {
             return c.json({ message: "Limit must be a positive number" }, 400);
         }
+
+        // console.log(`SELECT * FROM notices WHERE notice_at > ${since} ORDER BY notice_at DESC LIMIT ${limit}`);
 
         const { results } = await c.env.DB.prepare(
             `SELECT * FROM notices WHERE notice_at > ? ORDER BY notice_at DESC LIMIT ?`
@@ -58,36 +64,31 @@ app.post(
                 `SELECT MAX(notice_at) as lastNoticeAt FROM notices`
             ).first<{ lastNoticeAt: string | null }>();
 
-            const lastNoticeAt = res?.lastNoticeAt || "1970-01-01T00:00:00Z";
+            console.log("Last notice date:", res?.lastNoticeAt);
+
+            const lastNoticeAt = res?.lastNoticeAt || "01-01-2023 00:00";
 
             if (!c.env.SCRAPER_API_URL) {
                 return c.json({ message: "SCRAPER_API_URL not configured" }, 500);
             }
 
-            // Trigger the scraper (BPS) by calling its API
-            const scraperRes = await fetch(
+            // Trigger the scraper by calling its API
+            await axios.post<{
+                message: string;
+
+            }>(
                 `${c.env.SCRAPER_API_URL}/scrape-notices`,
                 {
-                    method: "POST",
+                    ...data,
+                    lastKnownNoticeAt: lastNoticeAt,
+                },
+                {
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                        ...data,
-                        lastNoticeAt,
-                    }),
                 }
-            );
-
-            if (!scraperRes.ok) {
-                const errorText = await scraperRes.text();
-                console.error("Scraper API error:", errorText);
-                return c.json(
-                    {
-                        message: "Failed to trigger scraper",
-                        error: errorText,
-                    },
-                    500
-                );
-            }
+            ).then((res) => res.data).catch((error) => {
+                console.error("Error calling scraper API:", error);
+                throw new Error("Failed to trigger scraper API");
+            })
 
             return c.json({
                 message: "Scraper triggered successfully",
@@ -95,7 +96,8 @@ app.post(
             });
         } catch (error) {
             console.error("Error in scrape-notices endpoint:", error);
-            return c.json({ message: "Internal server error" }, 500);
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            return c.json({ message: "Internal server error", errorMessage }, 500);
         }
     }
 );

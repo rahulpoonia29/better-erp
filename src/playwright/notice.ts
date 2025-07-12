@@ -66,17 +66,18 @@ export class NoticeScraper {
                         continue;
                     }
 
-                    // Validate date format
-                    const noticeDate = new Date(noticeAt);
-                    const lastKnownDate = new Date(this.LAST_NOTICE_AT);
+                    // Parse dates using helper
+                    const noticeDate = this.parseNoticeDate(noticeAt);
+                    const lastKnownDate = this.parseNoticeDate(this.LAST_NOTICE_AT);
 
-                    if (isNaN(noticeDate.getTime())) {
+                    if (!noticeDate || !lastKnownDate) {
                         console.warn(
                             `Row ${i}: Invalid notice date format: ${noticeAt}`
                         );
                         continue;
                     }
 
+                    // Only scrape notices newer than LAST_NOTICE_AT
                     if (noticeDate <= lastKnownDate) {
                         console.log(
                             `Reached notices older than ${this.LAST_NOTICE_AT}, stopping`
@@ -153,5 +154,18 @@ export class NoticeScraper {
             console.error("Notice scraping failed:", errorMessage);
             throw new Error(`Failed to scrape notices: ${errorMessage}`);
         }
+    }
+
+    private parseNoticeDate(dateStr: string): Date | null {
+        const match = /^(\d{2})-(\d{2})-(\d{4}) (\d{2}):(\d{2})$/.exec(dateStr);
+        if (!match) return null;
+        const [_, dd, mm, yyyy, hh, min] = match;
+        return new Date(
+            Number(yyyy),
+            Number(mm) - 1,
+            Number(dd),
+            Number(hh),
+            Number(min)
+        );
     }
 }

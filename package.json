@@ -5,13 +5,14 @@
         "dev": "tsx watch --env-file=.env src/index.ts",
         "build": "tsc",
         "start": "node --env-file=.env dist/src/index.js",
-        "cf-dev": "wrangler dev",
+        "cf-dev": "wrangler dev --x-remote-bindings",
         "cf-deploy": "wrangler deploy --minify",
         "cf-typegen": "wrangler types --env-interface CloudflareBindings"
     },
     "dependencies": {
         "@hono/node-server": "^1.15.0",
         "@hono/zod-validator": "^0.7.0",
+        "axios": "^1.10.0",
         "hono": "^4.8.4",
         "playwright": "^1.54.1",
         "wrangler": "^4.24.3",
