@@ -25,6 +25,19 @@ app.post(
     async (c) => {
         const data = c.req.valid("json");
 
+        // Security: Check API key in Authorization header
+        const authHeader = c.req.header("Authorization");
+        if (!authHeader || !authHeader.startsWith("Bearer ")) {
+            return c.json(
+                { message: "Missing or invalid Authorization header" },
+                401
+            );
+        }
+        const apiKey = authHeader.replace("Bearer ", "");
+        if (apiKey !== c.env.API_KEY) {
+            return c.json({ message: "Invalid API key" }, 403);
+        }
+
         const res = await c.env.DB.prepare(
             `SELECT MAX(notice_at) as lastNoticeAt FROM notices`
         ).first<{ lastNoticeAt: string | null }>();

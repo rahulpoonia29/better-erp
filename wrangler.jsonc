@@ -12,7 +12,8 @@
     },
 
     "vars": {
-        "SCRAPER_API_URL": ""
+        "SCRAPER_API_URL": "",
+        "API_KEY": ""
     },
 
     "d1_databases": [
