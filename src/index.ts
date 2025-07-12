@@ -3,6 +3,7 @@ import { zValidator } from "@hono/zod-validator";
 import { Hono } from "hono";
 import { NoticeScrapeParamsSchema, scrapeNotices } from "./services/notice.js";
 import type { Env } from "./types/hono.js";
+import { env } from "hono/adapter";
 
 interface HonoType {
     Bindings: Env;
@@ -19,10 +20,15 @@ app.post(
     zValidator("json", NoticeScrapeParamsSchema),
     async (c) => {
         const data = c.req.valid("json");
+        const { NOTICES_URL, NOTICE_WEBHOOK_URL, OTP_API_URL } = env(c);
 
         scrapeNotices({
             ...data,
-            ENV: c.env,
+            ENV: {
+                NOTICES_URL,
+                NOTICE_WEBHOOK_URL,
+                OTP_API_URL,
+            },
         });
 
         return c.json({ message: "Scraping started" });
@@ -32,7 +38,7 @@ app.post(
 serve(
     {
         fetch: app.fetch,
-        port: 2900,
+        port: 9000,
     },
     (info) => {
         console.log(`Server is running on http://localhost:${info.port}`);
