@@ -67,8 +67,11 @@ export class NoticeScraper {
                     }
 
                     // Parse dates using helper
-                    const noticeDate = this.parseNoticeDate(noticeAt);
-                    const lastKnownDate = this.parseNoticeDate(this.LAST_NOTICE_AT);
+                    const noticeDate = new Date(noticeAt)
+                    const lastKnownDate = new Date(this.LAST_NOTICE_AT);
+
+                    console.log("Notice date:", noticeDate, "Last known date:", lastKnownDate);
+
 
                     if (!noticeDate || !lastKnownDate) {
                         console.warn(
@@ -154,18 +157,5 @@ export class NoticeScraper {
             console.error("Notice scraping failed:", errorMessage);
             throw new Error(`Failed to scrape notices: ${errorMessage}`);
         }
-    }
-
-    private parseNoticeDate(dateStr: string): Date | null {
-        const match = /^(\d{2})-(\d{2})-(\d{4}) (\d{2}):(\d{2})$/.exec(dateStr);
-        if (!match) return null;
-        const [_, dd, mm, yyyy, hh, min] = match;
-        return new Date(
-            Number(yyyy),
-            Number(mm) - 1,
-            Number(dd),
-            Number(hh),
-            Number(min)
-        );
     }
 }

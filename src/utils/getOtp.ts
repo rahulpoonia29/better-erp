@@ -2,15 +2,19 @@ export async function getOTPWithBackoff(
     OTP_API_URL: string,
     rollNo: string,
     maxAttempts: number = 6,
-    initialDelay: number = 2000
+    initialDelay: number = 2000,
+    backoffDelay: number = 2000
 ): Promise<string> {
     if (!OTP_API_URL || !rollNo) {
         throw new Error("OTP_API_URL and rollNo are required");
     }
 
     const requestedAt = new Date().toISOString().slice(0, 19).replace("T", " ");
+
+    await new Promise((r) => setTimeout(r, initialDelay));
+
     let attempt = 0;
-    let delay = initialDelay;
+    let delay = backoffDelay;
     let lastError: Error | null = null;
 
     while (attempt < maxAttempts) {
@@ -60,7 +64,7 @@ export async function getOTPWithBackoff(
         if (attempt < maxAttempts - 1) {
             console.log(`Waiting ${delay}ms before next attempt...`);
             await new Promise((r) => setTimeout(r, delay));
-            delay = Math.min(delay * 2, 30000); // Cap at 30 seconds
+            delay = Math.min(delay * 2, 30000);
         }
         attempt++;
     }

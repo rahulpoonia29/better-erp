@@ -109,6 +109,8 @@ app.post(
         try {
             const notices = c.req.valid("json");
 
+            console.log("Received notices webhook with", notices.length, "notices");
+
             if (!notices || notices.length === 0) {
                 return c.json({ message: "No notices provided" }, 400);
             }
