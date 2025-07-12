@@ -19,19 +19,47 @@ app.post(
     "/scrape-notices",
     zValidator("json", NoticeScrapeParamsSchema),
     async (c) => {
-        const data = c.req.valid("json");
-        const { NOTICES_URL, NOTICE_WEBHOOK_URL, OTP_API_URL } = env(c);
+        try {
+            const data = c.req.valid("json");
+            const { NOTICES_URL, NOTICE_WEBHOOK_URL, OTP_API_URL } = env(c);
 
-        scrapeNotices({
-            ...data,
-            ENV: {
-                NOTICES_URL,
-                NOTICE_WEBHOOK_URL,
-                OTP_API_URL,
-            },
-        });
+            if (!NOTICES_URL || !NOTICE_WEBHOOK_URL || !OTP_API_URL) {
+                return c.json(
+                    {
+                        message: "Missing required environment variables",
+                        missing: {
+                            NOTICES_URL: !NOTICES_URL,
+                            NOTICE_WEBHOOK_URL: !NOTICE_WEBHOOK_URL,
+                            OTP_API_URL: !OTP_API_URL,
+                        },
+                    },
+                    500
+                );
+            }
 
-        return c.json({ message: "Scraping started" });
+            // Start scraping asynchronously but don't await it
+            scrapeNotices({
+                ...data,
+                ENV: {
+                    NOTICES_URL,
+                    NOTICE_WEBHOOK_URL,
+                    OTP_API_URL,
+                },
+            }).catch((error) => {
+                console.error("Scraping process failed:", error);
+            });
+
+            return c.json({ message: "Scraping started" });
+        } catch (error) {
+            console.error("Error starting scrape process:", error);
+            return c.json(
+                {
+                    message: "Failed to start scraping",
+                    error: error instanceof Error ? error.message : String(error),
+                },
+                500
+            );
+        }
     }
 );
 

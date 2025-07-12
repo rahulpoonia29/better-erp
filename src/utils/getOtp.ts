@@ -4,40 +4,69 @@ export async function getOTPWithBackoff(
     maxAttempts: number = 6,
     initialDelay: number = 2000
 ): Promise<string> {
+    if (!OTP_API_URL || !rollNo) {
+        throw new Error("OTP_API_URL and rollNo are required");
+    }
+
     const requestedAt = new Date().toISOString().slice(0, 19).replace("T", " ");
     let attempt = 0;
     let delay = initialDelay;
+    let lastError: Error | null = null;
 
     while (attempt < maxAttempts) {
         try {
-            const url = `${OTP_API_URL}/${rollNo}?requestedAt=${requestedAt}`;
+            const url = `${OTP_API_URL}/${rollNo}?requestedAt=${encodeURIComponent(
+                requestedAt
+            )}`;
+            console.log(
+                `Attempt ${attempt + 1}/${maxAttempts}: Requesting OTP from ${url}`
+            );
+
             const res = await fetch(url);
 
             console.log(
-                "The response from server ",
-                res.status,
-                res.statusText,
-                " after a delay of ",
-                delay
+                `Response: ${res.status} ${res.statusText} after ${delay}ms delay`
             );
 
             if (res.ok) {
-                const { otp } = (await res.json()) as {
-                    otp: string;
-                    createdAt: string;
-                };
+                const responseText = await res.text();
+                let responseData;
+
+                try {
+                    responseData = JSON.parse(responseText);
+                } catch (parseError) {
+                    throw new Error(`Invalid JSON response: ${responseText}`);
+                }
+
+                const { otp } = responseData as { otp?: string; createdAt?: string };
 
                 if (otp && typeof otp === "string" && otp.trim()) {
-                    console.log("OTP fetched successfully:", otp);
+                    console.log("OTP fetched successfully");
                     return otp.trim();
+                } else {
+                    throw new Error("Invalid OTP format or empty OTP received");
                 }
+            } else if (res.status === 404) {
+                // OTP not ready yet, continue retrying
+                console.log("OTP not ready yet, retrying...");
+            } else {
+                throw new Error(`HTTP ${res.status}: ${res.statusText}`);
             }
-        } catch {
-            // Ignore error and continue retrying
+        } catch (error) {
+            lastError = error instanceof Error ? error : new Error(String(error));
+            console.log(`Attempt ${attempt + 1} failed:`, lastError.message);
         }
-        await new Promise((r) => setTimeout(r, delay));
-        delay *= 2; // Exponential backoff
+
+        if (attempt < maxAttempts - 1) {
+            console.log(`Waiting ${delay}ms before next attempt...`);
+            await new Promise((r) => setTimeout(r, delay));
+            delay = Math.min(delay * 2, 30000); // Cap at 30 seconds
+        }
         attempt++;
     }
-    throw new Error("Failed to get OTP after multiple attempts.");
+
+    throw new Error(
+        `Failed to get OTP after ${maxAttempts} attempts. Last error: ${lastError?.message || "Unknown error"
+        }`
+    );
 }
