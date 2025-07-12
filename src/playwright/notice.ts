@@ -3,9 +3,11 @@ import type { Env } from "../types/hono.js";
 
 export class NoticeScraper {
     private NOTICES_URL: string;
+    private LAST_NOTICE_AT: string;
 
-    constructor(private page: Page, ENV: Env) {
+    constructor(private page: Page, ENV: Env, lastKnownNoticeAt: string) {
         this.NOTICES_URL = ENV.NOTICES_URL;
+        this.LAST_NOTICE_AT = lastKnownNoticeAt;
     }
 
     public async scrape() {
@@ -22,6 +24,17 @@ export class NoticeScraper {
 
         for (let i = 0; i < rows.length; i++) {
             const row = page.locator("#grid54 tr.jqgrow").nth(i);
+
+            const noticeAt =
+                (
+                    await row
+                        .locator('[aria-describedby="grid54_noticeat"]')
+                        .textContent()
+                )?.trim() || "";
+
+            if (new Date(noticeAt) <= new Date(this.LAST_NOTICE_AT)) {
+                break;
+            }
 
             const notice = {
                 rowNum: parseInt(

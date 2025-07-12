@@ -1,9 +1,8 @@
 import { serve } from "@hono/node-server";
-import { Hono } from "hono";
-import type { Env } from "./types/hono.js";
 import { zValidator } from "@hono/zod-validator";
-import { AuthCredantialsSchema } from "./types/session.js";
-import { scrapeNotices } from "./services/notice.js";
+import { Hono } from "hono";
+import { NoticeScrapeParamsSchema, scrapeNotices } from "./services/notice.js";
+import type { Env } from "./types/hono.js";
 
 interface HonoType {
     Bindings: Env;
@@ -17,7 +16,7 @@ app.get("/", (c) => {
 
 app.post(
     "/scrape-notices",
-    zValidator("json", AuthCredantialsSchema),
+    zValidator("json", NoticeScrapeParamsSchema),
     async (c) => {
         const data = c.req.valid("json");
 
@@ -33,7 +32,7 @@ app.post(
 serve(
     {
         fetch: app.fetch,
-        port: 3000,
+        port: 2900,
     },
     (info) => {
         console.log(`Server is running on http://localhost:${info.port}`);

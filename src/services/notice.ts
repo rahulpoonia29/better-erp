@@ -1,13 +1,21 @@
+import z from "zod";
 import { NoticeScraper } from "../playwright/notice.js";
 import { ErpSession } from "../playwright/session.js";
 import type { Env } from "../types/hono.js";
-import type { AuthCredantials } from "../types/session.js";
+import { AuthCredantialsSchema } from "../types/session.js";
 
-type ScrapeParams = AuthCredantials & {
+export const NoticeScrapeParamsSchema = AuthCredantialsSchema.extend({
+    lastKnownNoticeAt: z.string().refine((val) => !isNaN(Date.parse(val)), {
+        message: "lastKnownNoticeAt must be a valid ISO date string",
+    }),
+});
+
+type NoticeScrapeParams = z.infer<typeof AuthCredantialsSchema> & {
     ENV: Env;
+    lastKnownNoticeAt: string;
 };
 
-export async function scrapeNotices(params: ScrapeParams) {
+export async function scrapeNotices(params: NoticeScrapeParams) {
     const { rollNo, password, securityAnswers } = params;
     const session = new ErpSession(
         rollNo,
@@ -18,10 +26,23 @@ export async function scrapeNotices(params: ScrapeParams) {
     await session.init();
     await session.login();
 
-    const scraper = new NoticeScraper(session.getPage(), params.ENV);
+    const scraper = new NoticeScraper(
+        session.getPage(),
+        params.ENV,
+        params.lastKnownNoticeAt
+    );
     const notices = await scraper.scrape();
 
-    console.log("Scraped notices:", notices);
+    // Post the notices to the webhook using fetch
+    await fetch(params.ENV.NOTICE_WEBHOOK_URL, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+        },
+        body: JSON.stringify(notices),
+    });
+
+    // console.log("Scraped notices:", notices);
 
     await session.close();
 }

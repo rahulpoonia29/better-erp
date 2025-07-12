@@ -1,10 +1,14 @@
-export interface Notice {
-    rowNum: number;
-    id: number;
-    type: string;
-    category: string;
-    company: string;
-    noticeAt: string;
-    noticedBy: number;
-    noticeText: string;
-}
+import z from "zod";
+
+export const NoticeSchema = z.object({
+    rowNum: z.number(),
+    id: z.number(),
+    type: z.string(),
+    category: z.string(),
+    company: z.string(),
+    noticeAt: z.string(),
+    noticedBy: z.number(),
+    noticeText: z.string(),
+});
+
+export type Notice = z.infer<typeof NoticeSchema>;
