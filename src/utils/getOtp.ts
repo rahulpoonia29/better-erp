@@ -1,76 +1,65 @@
 export async function getOTPWithBackoff(
     OTP_API_URL: string,
     rollNo: string,
-    maxAttempts: number = 6,
-    initialDelay: number = 2000,
-    backoffDelay: number = 2000
+    maxAttempts = 6,
+    initialDelay = 2000,
+    backoffDelay = 2000
 ): Promise<string> {
     if (!OTP_API_URL || !rollNo) {
         throw new Error("OTP_API_URL and rollNo are required");
     }
 
-    const requestedAt = new Date().toISOString().slice(0, 19).replace("T", " ");
+    const requestedAt = new Date().toISOString();
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-    await new Promise((r) => setTimeout(r, initialDelay));
+    await sleep(initialDelay);
 
     let attempt = 0;
     let delay = backoffDelay;
     let lastError: Error | null = null;
 
     while (attempt < maxAttempts) {
-        try {
-            const url = `${OTP_API_URL}/${rollNo}?requestedAt=${encodeURIComponent(
-                requestedAt
-            )}`;
-            console.log(
-                `Attempt ${attempt + 1}/${maxAttempts}: Requesting OTP from ${url}`
-            );
+        const url = `${OTP_API_URL}/${encodeURIComponent(rollNo)}?requestedAt=${encodeURIComponent(requestedAt)}`;
+        console.log(`Attempt ${attempt + 1}/${maxAttempts}: Requesting OTP from ${url}`);
 
+        try {
             const res = await fetch(url);
 
-            console.log(
-                `Response: ${res.status} ${res.statusText} after ${delay}ms delay`
-            );
-
             if (res.ok) {
-                const responseText = await res.text();
-                let responseData;
+                const { otp, createdAt } = await res.json<{
+                    otp: string;
+                    createdAt: string;
+                }>();
 
-                try {
-                    responseData = JSON.parse(responseText);
-                } catch (parseError) {
-                    throw new Error(`Invalid JSON response: ${responseText}`);
+                console.log(`✅ Response: otp=${otp}, createdAt=${createdAt}`);
+
+                if (otp != null) {
+                    return String(otp).trim();
                 }
 
-                const { otp } = responseData as { otp?: string; createdAt?: string };
+                throw new Error("Invalid or empty OTP received");
+            }
 
-                if (otp && typeof otp === "string" && otp.trim()) {
-                    console.log("OTP fetched successfully");
-                    return otp.trim();
-                } else {
-                    throw new Error("Invalid OTP format or empty OTP received");
-                }
-            } else if (res.status === 404) {
-                // OTP not ready yet, continue retrying
-                console.log("OTP not ready yet, retrying...");
+            if (res.status === 404) {
+                console.log("⚠️ OTP not ready yet (404), retrying...");
             } else {
                 throw new Error(`HTTP ${res.status}: ${res.statusText}`);
             }
-        } catch (error) {
-            lastError = error instanceof Error ? error : new Error(String(error));
-            console.log(`Attempt ${attempt + 1} failed:`, lastError.message);
+        } catch (err) {
+            lastError = err instanceof Error ? err : new Error(String(err));
+            console.log(`❌ Attempt ${attempt + 1} failed: ${lastError.message}`);
         }
 
-        if (attempt < maxAttempts - 1) {
-            console.log(`Waiting ${delay}ms before next attempt...`);
-            await new Promise((r) => setTimeout(r, delay));
+        attempt++;
+
+        if (attempt < maxAttempts) {
+            console.log(`⏳ Waiting ${delay}ms before next attempt...`);
+            await sleep(delay);
             delay = Math.min(delay * 2, 30000);
         }
-        attempt++;
     }
 
     throw new Error(
-        `Failed to get OTP after ${maxAttempts} attempts. Last error: ${lastError?.message || "Unknown error"
-        }`
+        `Failed to get OTP after ${maxAttempts} attempts. Last error: ${lastError?.message || "Unknown"}`
     );
 }

@@ -1,162 +1,166 @@
-import { Hono } from "hono";
-import { NoticeSchema, type Notice } from "../types/notice.js";
 import { zValidator } from "@hono/zod-validator";
+import { and, eq, gte } from "drizzle-orm";
+import { drizzle } from "drizzle-orm/d1";
+import { Hono } from "hono";
 import z from "zod";
-import { AuthCredantialsSchema } from "../types/session.js";
-import axios from "axios";
+import { otp } from "../db/schema/otp.js";
+import { notices } from "../db/schema/schema.js";
+import { NoticeSchema } from "../types/notice.js";
 
 const app = new Hono<{ Bindings: CloudflareBindings }>();
 
 app.get("/notices", async (c) => {
     try {
-        const since = c.req.query("since") || "01-01-2023 00:00";
-        console.log("Fetching notices since:", since);
-
+        const sinceRaw = c.req.query("since") || "01-01-2023 00:00";
         const limit = Math.min(parseInt(c.req.query("limit") || "50", 10), 100); // Cap at 100
-
-        // Validate date format using regex: DD-MM-YYYY HH:MM
-        const dateRegex = /^\d{2}-\d{2}-\d{4} \d{2}:\d{2}$/;
-        if (!dateRegex.test(since)) {
-            return c.json(
-                {
-                    message:
-                        "Invalid 'since' date format. Expected DD-MM-YYYY HH:MM",
-                },
-                400
-            );
-        }
 
         if (limit <= 0) {
             return c.json({ message: "Limit must be a positive number" }, 400);
         }
 
-        // console.log(`SELECT * FROM notices WHERE notice_at > ${since} ORDER BY notice_at DESC LIMIT ${limit}`);
+        // Convert `sinceRaw` (DD-MM-YYYY HH:mm) → ISO8601
+        let sinceISO: string;
 
-        const { results } = await c.env.DB.prepare(
-            `SELECT * FROM notices WHERE notice_at > ? ORDER BY notice_at DESC LIMIT ?`
-        )
-            .bind(since, limit)
-            .all();
+        try {
+            const match = sinceRaw.match(/^(\d{2})-(\d{2})-(\d{4}) (\d{2}):(\d{2})$/);
+            if (!match) throw new Error();
 
-        return c.json(results || []);
+            const [, dd, mm, yyyy, hh, min] = match;
+            const parsedDate = new Date(
+                Date.UTC(
+                    parseInt(yyyy),
+                    parseInt(mm) - 1,
+                    parseInt(dd),
+                    parseInt(hh),
+                    parseInt(min)
+                )
+            );
+
+            if (isNaN(parsedDate.getTime())) throw new Error();
+
+            sinceISO = parsedDate.toISOString();
+        } catch {
+            return c.json(
+                { message: "Invalid 'since' date format. Use DD-MM-YYYY HH:mm" },
+                400
+            );
+        }
+
+        const db = drizzle(c.env.DB);
+
+        const results = await db
+            .select()
+            .from(notices)
+            .where(gte(notices.noticeAt, sinceISO))
+            .orderBy(notices.noticeAt)
+            .limit(limit);
+
+        return c.json(results);
     } catch (error) {
         console.error("Error fetching notices:", error);
         return c.json({ message: "Internal server error" }, 500);
     }
 });
 
-app.post(
-    "/scrape-notices",
-    zValidator("json", AuthCredantialsSchema),
-    async (c) => {
-        const data = c.req.valid("json");
-
-        // Verify Authorization header
-        const authHeader = c.req.header("Authorization");
-        if (!authHeader?.startsWith("Bearer ")) {
-            return c.json(
-                {
-                    message:
-                        "Unauthorized: Missing or invalid Authorization header",
-                },
-                401
-            );
-        }
-
-        const apiKey = authHeader.slice(7); // remove "Bearer "
-        if (apiKey !== c.env.API_KEY) {
-            return c.json({ message: "Forbidden: Invalid API key" }, 403);
-        }
-
-        if (!c.env.SCRAPER_API_URL) {
-            return c.json(
-                { message: "Server error: SCRAPER_API_URL not configured" },
-                500
-            );
-        }
-
-        // Get last notice timestamp
-        const dbRes = await c.env.DB.prepare(
-            `SELECT MAX(notice_at) AS lastNoticeAt FROM notices`
-        ).first<{ lastNoticeAt: string | null }>();
-
-        const lastNoticeAt = dbRes?.lastNoticeAt ?? "01-01-2023 00:00";
-        console.log("Last notice date:", lastNoticeAt);
-
-        // Trigger the scraper
-        try {
-            const response = await axios.post<{ message: string }>(
-                `${c.env.SCRAPER_API_URL}/scrape-notices`,
-                {
-                    ...data,
-                    lastNoticeAt,
-                },
-                {
-                    headers: { "Content-Type": "application/json" },
-                }
-            );
-
-            return c.json({
-                message:
-                    response.data.message || "Scraper triggered successfully",
-                lastNoticeAt,
-            });
-        } catch (err) {
-            console.error("Error calling scraper API:", err);
-            return c.json(
-                {
-                    message: "Failed to trigger scraper API",
-                    error: err instanceof Error ? err.message : String(err),
-                },
-                502 // bad gateway because downstream failed
-            );
-        }
-    }
-);
 
 app.post(
     "/notices/webhook",
-    zValidator("json", z.array(NoticeSchema)),
+    zValidator("json", z.array(NoticeSchema.pick({
+        type: true,
+        category: true,
+        company: true,
+        noticeAt: true,
+        noticedBy: true,
+        noticeText: true
+    }))),
     async (c) => {
         try {
-            const notices = c.req.valid("json");
-
+            const rawNotices = c.req.valid("json");
             console.log(
                 "Received notices webhook with",
-                notices.length,
+                rawNotices.length,
                 "notices"
             );
 
-            if (!notices || notices.length === 0) {
+            if (!notices || rawNotices.length === 0) {
                 return c.json({ message: "No notices provided" }, 400);
             }
 
-            const stmt = c.env.DB.prepare(
-                `INSERT OR IGNORE INTO notices 
-                (id, row_num, type, category, company, notice_at, noticed_by, notice_text) 
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+            const formattedNotices = rawNotices.map((notice) => {
+                let noticeAtISO: string;
+
+                try {
+                    // Parse DD-MM-YYYY HH:mm to ISO
+                    const match = notice.noticeAt.match(
+                        /^(\d{2})-(\d{2})-(\d{4}) (\d{2}):(\d{2})$/
+                    );
+                    if (!match) throw new Error(`Invalid date format: ${notice.noticeAt}`);
+
+                    const [, dd, mm, yyyy, hh, min] = match;
+
+                    const parsedDate = new Date(
+                        Date.UTC(
+                            parseInt(yyyy),
+                            parseInt(mm) - 1, // month is 0-based
+                            parseInt(dd),
+                            parseInt(hh),
+                            parseInt(min)
+                        )
+                    );
+
+                    if (isNaN(parsedDate.getTime())) {
+                        throw new Error(`Invalid parsed date: ${notice.noticeAt}`);
+                    }
+
+                    noticeAtISO = parsedDate.toISOString();
+
+                    console.log("The date", noticeAtISO);
+
+                } catch (err) {
+                    console.warn(
+                        `Failed to parse noticeAt: ${notice.noticeAt}, using current time, the notice ${notice.company}`
+                    );
+                    noticeAtISO = new Date().toISOString();
+                }
+
+                return {
+                    type: notice.type,
+                    category: notice.category,
+                    company: notice.company,
+                    noticeAt: noticeAtISO, // ISO8601 string
+                    noticedBy: notice.noticedBy,
+                    noticeText: notice.noticeText,
+                };
+            });
+
+            const db = drizzle(c.env.DB);
+
+            const statements = formattedNotices.map(notice => {
+                return db.insert(notices).values(notice)
+            }
             );
 
-            const batch = c.env.DB.batch(
-                notices.map((notice: Notice) =>
-                    stmt.bind(
-                        notice.id,
-                        notice.rowNum,
-                        notice.type,
-                        notice.category,
-                        notice.company,
-                        notice.noticeAt,
-                        notice.noticedBy,
-                        notice.noticeText
-                    )
-                )
-            );
+            if (statements.length > 0) {
+                await db.batch(statements as [typeof statements[0], ...typeof statements]);
+            }
 
-            await batch;
-
-            return c.json({ message: `${notices.length} notices processed` });
+            return c.json({
+                message: `${rawNotices.length} notices processed`,
+            });
         } catch (error) {
             console.error("Error processing notices webhook:", error);
+
+            if (error instanceof Error) {
+                console.error("Error message:", error.message);
+                // if Drizzle adds cause, log it
+                if ('cause' in error) {
+                    console.error("Cause:", (error as any).cause);
+                }
+                if ('stack' in error) {
+                    console.error("Stack:", error.stack);
+                }
+            }
+
             return c.json({ message: "Failed to process notices" }, 500);
         }
     }
@@ -170,35 +174,35 @@ app.get("/otp/:rollNo", async (c) => {
         if (!rollNo) {
             return c.json({ message: "rollNo parameter is required" }, 400);
         }
-
         if (!requestedAt) {
             return c.json({ message: "requestedAt query param required" }, 400);
         }
-
-        // Validate date format
         if (isNaN(Date.parse(requestedAt))) {
             return c.json({ message: "Invalid requestedAt date format" }, 400);
         }
 
-        console.log("Requested OTP for rollNo:", rollNo, "at", requestedAt);
+        const db = drizzle(c.env.DB);
 
-        const row = await c.env.DB.prepare(
-            `SELECT otp, created_at FROM otps
-            WHERE roll_no = ? AND created_at > ?
-            ORDER BY created_at ASC
-            LIMIT 1`
-        )
-            .bind(rollNo, requestedAt)
-            .first();
+        const OTP = await db
+            .select()
+            .from(otp)
+            .where(
+                and(eq(otp.roll_no, rollNo), gte(otp.created_at, requestedAt))
+            )
+            .orderBy(otp.created_at)
+            .limit(1);
 
-        console.log("OTP row found:", !!row);
 
-        if (!row) {
+
+        if (OTP.length === 0) {
             console.log("No OTP found for rollNo:", rollNo);
             return c.json({ message: "No OTP found yet" }, 404);
         }
 
-        return c.json({ otp: row.otp, createdAt: row.created_at });
+        return c.json({
+            otp: OTP[0].otp,
+            createdAt: OTP[0].created_at,
+        });
     } catch (error) {
         console.error("Error fetching OTP:", error);
         return c.json({ message: "Internal server error" }, 500);

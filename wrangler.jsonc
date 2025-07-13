@@ -7,6 +7,7 @@
     "name": "better-erp-main-api",
     "main": "src/main/index.ts",
     "compatibility_date": "2025-07-12",
+    "compatibility_flags": ["nodejs_compat"],
     "observability": {
         "enabled": true
     },
@@ -20,7 +21,8 @@
         {
             "binding": "DB",
             "database_name": "erp-main",
-            "database_id": "2287b60b-20b8-4c03-a78b-eaddad482859"
+            "database_id": "2287b60b-20b8-4c03-a78b-eaddad482859",
+            // "experimental_remote": true
         }
     ]
 
