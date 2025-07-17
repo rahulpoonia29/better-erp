@@ -67,11 +67,15 @@ export class NoticeScraper {
                     }
 
                     // Parse dates using helper
-                    const noticeDate = new Date(noticeAt)
+                    const noticeDate = new Date(noticeAt);
                     const lastKnownDate = new Date(this.LAST_NOTICE_AT);
 
-                    console.log("Notice date:", noticeDate, "Last known date:", lastKnownDate);
-
+                    console.log(
+                        "Notice date:",
+                        noticeDate,
+                        "Last known date:",
+                        lastKnownDate
+                    );
 
                     if (!noticeDate || !lastKnownDate) {
                         console.warn(
@@ -103,44 +107,101 @@ export class NoticeScraper {
                     const noticedBy = parseInt(rawNoticedBy || "0", 10);
 
                     if (rowNum === 0 || id === 0) {
-                        console.warn(`Row ${i}: Invalid row number or ID, skipping`);
+                        console.warn(
+                            `Row ${i}: Invalid row number or ID, skipping`
+                        );
                         continue;
+                    }
+
+                    // Get basic notice data first
+                    const type =
+                        (
+                            await row
+                                .locator('[aria-describedby="grid54_type"]')
+                                .textContent()
+                        )?.trim() || "";
+
+                    const category =
+                        (
+                            await row
+                                .locator('[aria-describedby="grid54_category"]')
+                                .textContent()
+                        )?.trim() || "";
+
+                    const company =
+                        (
+                            await row
+                                .locator('[aria-describedby="grid54_company"]')
+                                .textContent()
+                        )?.trim() || "";
+
+                    // Click notice link to open dialog and get full text
+                    let fullNoticeText = "";
+                    try {
+                        const noticeLink = row.locator(
+                            '[aria-describedby="grid54_notice"] a'
+                        );
+                        await noticeLink.click();
+
+                        // Wait for dialog to appear
+                        await page.waitForSelector(".ui-dialog", {
+                            state: "visible",
+                            timeout: 10000,
+                        });
+
+                        // Wait for iframe to load
+                        const iframe = page.frameLocator(
+                            ".ui-dialog-content iframe"
+                        );
+                        await iframe
+                            .locator("#printableArea")
+                            .waitFor({ timeout: 10000 });
+
+                        // Extract full notice text from iframe
+                        fullNoticeText =
+                            (await iframe
+                                .locator("#printableArea")
+                                .textContent()) || "";
+                        fullNoticeText = fullNoticeText.trim();
+
+                        // Close dialog
+                        await page.locator(".ui-dialog-titlebar-close").click();
+                        await page.waitForSelector(".ui-dialog", {
+                            state: "hidden",
+                            timeout: 5000,
+                        });
+                    } catch (dialogError) {
+                        console.warn(
+                            `Row ${i}: Failed to extract full notice text:`,
+                            dialogError
+                        );
+                        // Fallback to title attribute if dialog fails
+                        fullNoticeText =
+                            (
+                                await row
+                                    .locator(
+                                        '[aria-describedby="grid54_notice"] a'
+                                    )
+                                    .getAttribute("title")
+                            )?.trim() || "";
                     }
 
                     const notice = {
                         rowNum,
                         id,
-                        type:
-                            (
-                                await row
-                                    .locator('[aria-describedby="grid54_type"]')
-                                    .textContent()
-                            )?.trim() || "",
-                        category:
-                            (
-                                await row
-                                    .locator('[aria-describedby="grid54_category"]')
-                                    .textContent()
-                            )?.trim() || "",
-                        company:
-                            (
-                                await row
-                                    .locator('[aria-describedby="grid54_company"]')
-                                    .textContent()
-                            )?.trim() || "",
+                        type,
+                        category,
+                        company,
                         noticeAt,
                         noticedBy,
-                        noticeText:
-                            (
-                                await row
-                                    .locator('[aria-describedby="grid54_notice"] a')
-                                    .getAttribute("title")
-                            )?.trim() || "",
+                        noticeText: fullNoticeText,
                     };
 
                     notices.push(notice);
                     console.log(
-                        `[${i + 1}/${rows.length}] Scraped notice ${notice.rowNum}: ${notice.type}`
+                        `[${i + 1}/${rows.length}] Scraped notice ${
+                            notice.rowNum
+                        }: ${notice.type}`
                     );
                 } catch (rowError) {
                     console.error(`Error processing row ${i}:`, rowError);
