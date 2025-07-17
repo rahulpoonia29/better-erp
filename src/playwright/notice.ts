@@ -186,6 +186,49 @@ export class NoticeScraper {
                             )?.trim() || "";
                     }
 
+                    // Extract document download link if available
+                    let documentUrl = "";
+                    try {
+                        const downloadLink = row.locator(
+                            '[aria-describedby="grid54_view1"] a'
+                        );
+                        const downloadLinkExists =
+                            (await downloadLink.count()) > 0;
+
+                        if (downloadLinkExists) {
+                            await downloadLink.click();
+
+                            // Wait for dialog to appear
+                            await page.waitForSelector(".ui-dialog", {
+                                state: "visible",
+                                timeout: 10000,
+                            });
+
+                            // Wait for iframe to load and extract the src URL
+                            const iframe = page.locator(
+                                ".ui-dialog-content iframe"
+                            );
+                            await iframe.waitFor({ timeout: 10000 });
+
+                            documentUrl =
+                                (await iframe.getAttribute("src")) || "";
+
+                            // Close dialog
+                            await page
+                                .locator(".ui-dialog-titlebar-close")
+                                .click();
+                            await page.waitForSelector(".ui-dialog", {
+                                state: "hidden",
+                                timeout: 5000,
+                            });
+                        }
+                    } catch (downloadError) {
+                        console.warn(
+                            `Row ${i}: Failed to extract document URL:`,
+                            downloadError
+                        );
+                    }
+
                     const notice = {
                         rowNum,
                         id,
@@ -195,6 +238,7 @@ export class NoticeScraper {
                         noticeAt,
                         noticedBy,
                         noticeText: fullNoticeText,
+                        documentUrl,
                     };
 
                     notices.push(notice);

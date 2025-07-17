@@ -9,6 +9,7 @@ export const NoticeSchema = z.object({
     noticeAt: z.string(),
     noticedBy: z.number(),
     noticeText: z.string(),
+    documentUrl: z.string().optional(),
 });
 
 export type Notice = z.infer<typeof NoticeSchema>;

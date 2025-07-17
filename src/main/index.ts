@@ -457,39 +457,39 @@ app.post(
                 message: `${structuredNotice.length} structured notices inserted`,
             });
         } catch (error) {
-            if (error instanceof ZodError) {
-                const formattedErrors = error.errors.map((err, index) => {
-                    const pathStr = err.path.length > 0 ? err.path.join('.') : 'root';
-                    const isArrayItem = typeof err.path[0] === 'number';
-                    const itemIndex = isArrayItem ? err.path[0] : null;
+            // if (error instanceof ZodError) {
+            //     const formattedErrors = error.errors.map((err, index) => {
+            //         const pathStr = err.path.length > 0 ? err.path.join('.') : 'root';
+            //         const isArrayItem = typeof err.path[0] === 'number';
+            //         const itemIndex = isArrayItem ? err.path[0] : null;
                     
-                    let message = err.message;
-                    if (itemIndex !== null) {
-                        message = `Item ${itemIndex}: ${message}`;
-                    }
+            //         let message = err.message;
+            //         if (itemIndex !== null) {
+            //             message = `Item ${itemIndex}: ${message}`;
+            //         }
                     
-                    return {
-                        field: pathStr,
-                        message,
-                        code: err.code,
-                        ...(err.code === 'invalid_type' && {
-                            expected: err.expected,
-                            received: err.received
-                        }),
-                        ...(itemIndex !== null && { itemIndex })
-                    };
-                });
+            //         return {
+            //             field: pathStr,
+            //             message,
+            //             code: err.code,
+            //             ...(err.code === 'invalid_type' && {
+            //                 expected: err.expected,
+            //                 received: err.received
+            //             }),
+            //             ...(itemIndex !== null && { itemIndex })
+            //         };
+            //     });
                 
-                console.error("Validation errors:", formattedErrors);
-                return c.json(
-                    {
-                        message: "Validation failed",
-                        errors: formattedErrors,
-                        totalErrors: error.errors.length
-                    },
-                    400
-                );
-            }
+            //     console.error("Validation errors:", formattedErrors);
+            //     return c.json(
+            //         {
+            //             message: "Validation failed",
+            //             errors: formattedErrors,
+            //             totalErrors: error.errors.length
+            //         },
+            //         400
+            //     );
+            // }
 
             console.error("Error inserting structured notices:", error);
             return c.json(

@@ -21,7 +21,15 @@ app.post(
     async (c) => {
         try {
             const data = c.req.valid("json");
-            const { NOTICES_URL, NOTICE_WEBHOOK_URL, OTP_API_URL } = env(c);
+            const {
+                NOTICES_URL,
+                NOTICE_WEBHOOK_URL,
+                OTP_API_URL,
+                CLOUDFLARE_ACCOUND_ID,
+                CLOUDFLARE_D1_TOKEN,
+                CLOUDFLARE_DATABASE_ID,
+                GOOGLE_GENAI_API_KEY,
+            } = env(c);
 
             if (!NOTICES_URL || !NOTICE_WEBHOOK_URL || !OTP_API_URL) {
                 return c.json(
@@ -44,6 +52,10 @@ app.post(
                     NOTICES_URL,
                     NOTICE_WEBHOOK_URL,
                     OTP_API_URL,
+                    CLOUDFLARE_ACCOUND_ID,
+                    CLOUDFLARE_DATABASE_ID,
+                    CLOUDFLARE_D1_TOKEN,
+                    GOOGLE_GENAI_API_KEY,
                 },
             }).catch((error) => {
                 console.error("Scraping process failed:", error);
@@ -55,7 +67,8 @@ app.post(
             return c.json(
                 {
                     message: "Failed to start scraping",
-                    error: error instanceof Error ? error.message : String(error),
+                    error:
+                        error instanceof Error ? error.message : String(error),
                 },
                 500
             );
