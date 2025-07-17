@@ -10,7 +10,8 @@
         "cf-typegen": "wrangler types --env-interface CloudflareBindings",
         "db:migrate": "drizzle-kit migrate",
         "db:generate": "drizzle-kit generate",
-        "db:up": "drizzle-kit up"
+        "db:up": "drizzle-kit up",
+        "db:studio": "drizzle-kit studio"
     },
     "dependencies": {
         "@google/genai": "^1.9.0",

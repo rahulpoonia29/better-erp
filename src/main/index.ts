@@ -2,28 +2,65 @@ import { zValidator } from "@hono/zod-validator";
 import { and, desc, eq, gte } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/d1";
 import { Hono } from "hono";
-import z from "zod";
+import z, { ZodError } from "zod";
 import { otp } from "../db/schema/otp.js";
 import { notices } from "../db/schema/schema.js";
 import { NoticeSchema } from "../types/notice.js";
 import { generateStructuredNotice } from "../utils/getStructuredNotice.js";
-import { structuredNoticeSchema } from "../types/structured-notice.js";
+import { cors } from "hono/cors";
 import { structuredNotices } from "../db/schema/structuredNotices.js";
+import { StructuredNoticeSchema } from "../types/structuredNotice.js";
 
 const app = new Hono<{ Bindings: CloudflareBindings }>();
 
+app.use(
+    "*",
+    cors({
+        origin: "*",
+        allowMethods: ["GET", "POST"],
+        allowHeaders: ["Content-Type", "Authorization"],
+    })
+);
+
+// Helper function for date parsing
+function parseDDMMYYYYToISO(ddmmyyyyHHMM: string): string {
+    if (!ddmmyyyyHHMM) return new Date().toISOString();
+
+    const match = ddmmyyyyHHMM.match(
+        /^(\d{2})-(\d{2})-(\d{4}) (\d{2}):(\d{2})$/
+    );
+    if (!match) return new Date().toISOString();
+
+    const [, dd, mm, yyyy, hh, min] = match;
+
+    const d = new Date(
+        Date.UTC(
+            parseInt(yyyy),
+            parseInt(mm) - 1,
+            parseInt(dd),
+            parseInt(hh),
+            parseInt(min)
+        )
+    );
+
+    return isNaN(d.getTime()) ? new Date().toISOString() : d.toISOString();
+}
+
+// GET ROUTES
+
+// Get notices
 app.get("/notices", async (c) => {
     try {
         const sinceRaw = c.req.query("since") || "01-01-2023 00:00";
-        const limit = Math.min(parseInt(c.req.query("limit") || "50", 10), 100); // Cap at 100
+        const limit = Math.min(parseInt(c.req.query("limit") || "50", 10), 200);
+        const page = Math.max(parseInt(c.req.query("page") || "1", 10), 1);
+        const offset = Math.max(parseInt(c.req.query("offset") || "0", 10), 0);
 
         if (limit <= 0) {
             return c.json({ message: "Limit must be a positive number" }, 400);
         }
 
-        // Convert `sinceRaw` (DD-MM-YYYY HH:mm) → ISO8601
         let sinceISO: string;
-
         try {
             const match = sinceRaw.match(
                 /^(\d{2})-(\d{2})-(\d{4}) (\d{2}):(\d{2})$/
@@ -42,7 +79,6 @@ app.get("/notices", async (c) => {
             );
 
             if (isNaN(parsedDate.getTime())) throw new Error();
-
             sinceISO = parsedDate.toISOString();
         } catch {
             return c.json(
@@ -56,229 +92,139 @@ app.get("/notices", async (c) => {
 
         const db = drizzle(c.env.DB);
 
+        // Calculate offset from page if offset not provided
+        const calculatedOffset = c.req.query("offset")
+            ? offset
+            : (page - 1) * limit;
+
+        // Get total count for pagination metadata
+        const totalCountResult = await db
+            .select({ count: eq(notices.id, notices.id) })
+            .from(notices)
+            .where(gte(notices.noticeAt, sinceISO));
+
         const results = await db
             .select()
             .from(notices)
             .where(gte(notices.noticeAt, sinceISO))
             .orderBy(desc(notices.noticeAt))
-            .limit(limit);
+            .limit(limit)
+            .offset(calculatedOffset);
 
-        return c.json(results);
+        const totalCount = totalCountResult.length;
+        const totalPages = Math.ceil(totalCount / limit);
+        const hasNextPage = calculatedOffset + limit < totalCount;
+        const hasPreviousPage = calculatedOffset > 0;
+
+        return c.json({
+            data: results,
+            pagination: {
+                currentPage: page,
+                totalPages,
+                totalCount,
+                limit,
+                offset: calculatedOffset,
+                hasNextPage,
+                hasPreviousPage,
+                nextPage: hasNextPage ? page + 1 : null,
+                previousPage: hasPreviousPage ? page - 1 : null,
+            },
+        });
     } catch (error) {
         console.error("Error fetching notices:", error);
         return c.json({ message: "Internal server error" }, 500);
     }
 });
 
-app.post(
-    "/notices/webhook",
-    zValidator(
-        "json",
-        z.array(
-            NoticeSchema.pick({
-                type: true,
-                category: true,
-                company: true,
-                noticeAt: true,
-                noticedBy: true,
-                noticeText: true,
-            })
-        )
-    ),
-    async (c) => {
-        try {
-            const rawNotices = c.req.valid("json");
-            console.log(
-                "Received notices webhook with",
-                rawNotices.length,
-                "notices"
-            );
+// Get structured notices
+app.get("/structured-notices", async (c) => {
+    try {
+        const sinceRaw = c.req.query("since") || "01-01-2023 00:00";
+        const limit = Math.min(parseInt(c.req.query("limit") || "50", 10), 100);
+        const page = Math.max(parseInt(c.req.query("page") || "1", 10), 1);
+        const offset = Math.max(parseInt(c.req.query("offset") || "0", 10), 0);
 
-            if (!notices || rawNotices.length === 0) {
-                return c.json({ message: "No notices provided" }, 400);
-            }
-
-            const formattedNotices = rawNotices.map((notice) => {
-                let noticeAtISO: string;
-
-                try {
-                    // Parse DD-MM-YYYY HH:mm to ISO
-                    const match = notice.noticeAt.match(
-                        /^(\d{2})-(\d{2})-(\d{4}) (\d{2}):(\d{2})$/
-                    );
-                    if (!match)
-                        throw new Error(
-                            `Invalid date format: ${notice.noticeAt}`
-                        );
-
-                    const [, dd, mm, yyyy, hh, min] = match;
-
-                    const parsedDate = new Date(
-                        Date.UTC(
-                            parseInt(yyyy),
-                            parseInt(mm) - 1, // month is 0-based
-                            parseInt(dd),
-                            parseInt(hh),
-                            parseInt(min)
-                        )
-                    );
-
-                    if (isNaN(parsedDate.getTime())) {
-                        throw new Error(
-                            `Invalid parsed date: ${notice.noticeAt}`
-                        );
-                    }
-
-                    noticeAtISO = parsedDate.toISOString();
-
-                    console.log("The date", noticeAtISO);
-                } catch (err) {
-                    console.warn(
-                        `Failed to parse noticeAt: ${notice.noticeAt}, using current time, the notice ${notice.company}`
-                    );
-                    noticeAtISO = new Date().toISOString();
-                }
-
-                return {
-                    type: notice.type,
-                    category: notice.category,
-                    company: notice.company,
-                    noticeAt: noticeAtISO, // ISO8601 string
-                    noticedBy: notice.noticedBy,
-                    noticeText: notice.noticeText,
-                };
-            });
-
-            const sortedFormattedNotices = formattedNotices.sort((a, b) => {
-                return (
-                    new Date(b.noticeAt).getTime() -
-                    new Date(a.noticeAt).getTime()
-                );
-            });
-
-            const db = drizzle(c.env.DB);
-
-            for (const notice of sortedFormattedNotices) {
-                await db.insert(notices).values({
-                    type: notice.type,
-                    category: notice.category,
-                    company: notice.company,
-                    noticeAt: notice.noticeAt,
-                    noticedBy: notice.noticedBy,
-                    noticeText: notice.noticeText,
-                });
-            }
-
-            return c.json({
-                message: `${rawNotices.length} notices processed`,
-            });
-        } catch (error) {
-            console.error("Error processing notices webhook:", error);
-
-            if (error instanceof Error) {
-                console.error("Error message:", error.message);
-                // if Drizzle adds cause, log it
-                if ("cause" in error) {
-                    console.error("Cause:", (error as any).cause);
-                }
-                if ("stack" in error) {
-                    console.error("Stack:", error.stack);
-                }
-            }
-
-            return c.json({ message: "Failed to process notices" }, 500);
+        if (limit <= 0) {
+            return c.json({ message: "Limit must be a positive number" }, 400);
         }
-    }
-);
 
-app.post(
-    "/structured-notices",
-    zValidator(
-        "json",
-        NoticeSchema.pick({
-            type: true,
-            category: true,
-            company: true,
-            noticeAt: true,
-            noticedBy: true,
-            noticeText: true,
-        })
-    ),
-    async (c) => {
-        const rawNotice = c.req.valid("json");
-
+        let sinceISO: string;
         try {
-            // Call LLM to get structured output
+            const match = sinceRaw.match(
+                /^(\d{2})-(\d{2})-(\d{4}) (\d{2}):(\d{2})$/
+            );
+            if (!match) throw new Error();
 
-            const structured = await generateStructuredNotice(
-                c.env.GEN_AI_API_KEY,
-                rawNotice
+            const [, dd, mm, yyyy, hh, min] = match;
+            const parsedDate = new Date(
+                Date.UTC(
+                    parseInt(yyyy),
+                    parseInt(mm) - 1,
+                    parseInt(dd),
+                    parseInt(hh),
+                    parseInt(min)
+                )
             );
 
-            console.log(
-                "Structured notice generated:",
-                JSON.stringify(structured)
-            );
-
-            // const db = drizzle(c.env.DB);
-
-            // Insert structuredNotice into DB
-            // const [noticeRow] = await db
-            //     .insert(structuredNotices)
-            //     .values({
-            //         companyName: structured.companyName,
-            //         noticeTimestamp: structured.noticeTimestamp,
-            //         tags: structured.tags,
-            //         summary: structured.summary,
-            //         primaryDeadline: structured.primaryDeadline,
-            //         notes: structured.generalInfo,
-            //     })
-            //     .returning({ id: structuredNotices.id });
-
-            // const structuredNoticeId = noticeRow.id;
-
-            // Insert actions
-            // for (const action of structured.actions) {
-            //     const [actionRow] = await db
-            //         .insert(noticeActions)
-            //         .values({
-            //             noticeId: structuredNoticeId,
-            //             category: action.category,
-            //             type: action.type,
-            //             title: action.title,
-            //             details: action.details,
-            //             link: action.link,
-            //             isMandatory: action.isMandatory,
-            //         })
-            //         .returning({ id: noticeActions.id });
-
-            //     const actionId = actionRow.id;
-
-            //     // Insert eventDetails if present
-            //     if (action.eventDetails) {
-            //         await db.insert(actionEventDetails).values({
-            //             actionId,
-            //             startTime: action.eventDetails.startTime,
-            //             endTime: action.eventDetails.endTime,
-            //             mode: action.eventDetails.mode,
-            //             link: action.eventDetails.link,
-            //             location: action.eventDetails.location,
-            //         });
-            //     }
-            // }
-
-            // return c.json({ success: true, id: structuredNoticeId });
-            return c.json({ success: true });
-        } catch (error) {
-            console.error(error);
+            if (isNaN(parsedDate.getTime())) throw new Error();
+            sinceISO = parsedDate.toISOString();
+        } catch {
             return c.json(
-                { success: false, error: (error as Error).message },
-                500
+                {
+                    message:
+                        "Invalid 'since' date format. Use DD-MM-YYYY HH:mm",
+                },
+                400
             );
         }
-    }
-);
 
+        const db = drizzle(c.env.DB);
+
+        // Calculate offset from page if offset not provided
+        const calculatedOffset = c.req.query("offset")
+            ? offset
+            : (page - 1) * limit;
+
+        // Get total count for pagination metadata
+        const totalCountResult = await db
+            .select({ count: eq(structuredNotices.id, structuredNotices.id) })
+            .from(structuredNotices)
+            .where(gte(structuredNotices.postedAt, sinceISO));
+
+        const results = await db
+            .select()
+            .from(structuredNotices)
+            .where(gte(structuredNotices.postedAt, sinceISO))
+            .orderBy(desc(structuredNotices.postedAt))
+            .limit(limit)
+            .offset(calculatedOffset);
+
+        const totalCount = totalCountResult.length;
+        const totalPages = Math.ceil(totalCount / limit);
+        const hasNextPage = calculatedOffset + limit < totalCount;
+        const hasPreviousPage = calculatedOffset > 0;
+
+        return c.json({
+            data: results,
+            pagination: {
+                currentPage: page,
+                totalPages,
+                totalCount,
+                limit,
+                offset: calculatedOffset,
+                hasNextPage,
+                hasPreviousPage,
+                nextPage: hasNextPage ? page + 1 : null,
+                previousPage: hasPreviousPage ? page - 1 : null,
+            },
+        });
+    } catch (error) {
+        console.error("Error fetching structured notices:", error);
+        return c.json({ message: "Internal server error" }, 500);
+    }
+});
+
+// Get OTP
 app.get("/otp/:rollNo", async (c) => {
     try {
         const rollNo = c.req.param("rollNo");
@@ -295,7 +241,6 @@ app.get("/otp/:rollNo", async (c) => {
         }
 
         const db = drizzle(c.env.DB);
-
         const OTP = await db
             .select()
             .from(otp)
@@ -320,54 +265,239 @@ app.get("/otp/:rollNo", async (c) => {
     }
 });
 
+// POST ROUTES
+
+// Webhook for receiving notices
 app.post(
-    "/insert-structured-notice",
-    zValidator("json", z.array(structuredNoticeSchema)),
+    "/notices/webhook",
+    zValidator(
+        "json",
+        z.array(
+            NoticeSchema.pick({
+                // id: true,
+                type: true,
+                category: true,
+                company: true,
+                noticeAt: true,
+                noticedBy: true,
+                noticeText: true,
+            })
+        )
+    ),
     async (c) => {
-        const structuredNotice = c.req.valid("json");
+        try {
+            const rawNotices = c.req.valid("json");
+            console.log(
+                "Received notices webhook with",
+                rawNotices.length,
+                "notices"
+            );
 
-        const formattedStructuredNotice = structuredNotice.map((notice) => {
-            return {
-                companyName: notice.companyName,
-                noticeTimestamp: parseDDMMYYYYToISO(notice.noticeTimestamp),
-                tags: notice.tags,
-                summary: notice.summary,
-                primaryDeadline: parseDDMMYYYYToISO(notice.primaryDeadline!),
-                contextPoints: notice.contextPoints,
-                actions: notice.actions,
-                originalNotice: notice.originalNotice,
-            };
-        });
+            if (!rawNotices || rawNotices.length === 0) {
+                return c.json({ message: "No notices provided" }, 400);
+            }
 
-        const db = drizzle(c.env.DB);
+            const db = drizzle(c.env.DB);
+            // let processedNotices = 0;
+            // let processedStructuredNotices = 0;
+            const errors: string[] = [];
 
-        for (const notice of formattedStructuredNotice) {
-            await db.insert(structuredNotices).values(notice);
+            for (const notice of rawNotices) {
+                try {
+                    const formattedNotice = {
+                        type: notice.type,
+                        category: notice.category,
+                        company: notice.company,
+                        noticeAt: parseDDMMYYYYToISO(notice.noticeAt),
+                        noticedBy: notice.noticedBy,
+                        noticeText: notice.noticeText,
+                    };
+
+                    await db.insert(notices).values(formattedNotice);
+
+                    console.log(`Inserted raw notice for ${notice.company}`);
+
+                    try {
+                        const structured = await generateStructuredNotice(
+                            c.env.GEN_AI_API_KEY,
+                            notice
+                        );
+
+                        console.log(
+                            `Generated structured notice for ${notice.company}:`,
+                            JSON.stringify(structured, null, 2)
+                        );
+
+                        const formattedStructuredNotice = {
+                            company: structured.company,
+                            category: structured.category,
+                            postedAt: parseDDMMYYYYToISO(notice.noticeAt),
+                            deadline: structured.deadline,
+                            summary: structured.summary,
+                            context: structured.context,
+                            actions: structured.actions,
+                            pocs: structured.pocs,
+                            originalNotice: structured.originalNotice,
+                        };
+
+                        await db
+                            .insert(structuredNotices)
+                            .values(formattedStructuredNotice);
+
+                        console.log(
+                            `Inserted structured notice for ${notice.company}`
+                        );
+                    } catch (structuredError) {
+                        console.error(
+                            `Failed to generate/insert structured notice for ${notice.company}:`,
+                            structuredError
+                        );
+                        errors.push(
+                            `Failed to process structured notice for ${
+                                notice.company
+                            }: ${
+                                structuredError instanceof Error
+                                    ? structuredError.message
+                                    : "Unknown error"
+                            }`
+                        );
+                    }
+                } catch (noticeError) {
+                    console.error(
+                        `Failed to process notice for ${notice.company}:`,
+                        noticeError
+                    );
+                    errors.push(
+                        `Failed to process notice for ${notice.company}: ${
+                            noticeError instanceof Error
+                                ? noticeError.message
+                                : "Unknown error"
+                        }`
+                    );
+                }
+            }
+
+            console.log("Webhook processing complete");
+            return c.json({
+                success: true,
+            });
+        } catch (error) {
+            console.error("Error processing notices webhook:", error);
+
+            if (error instanceof Error) {
+                console.error("Error message:", error.message);
+                if ("cause" in error) {
+                    console.error("Cause:", (error as any).cause);
+                }
+                if ("stack" in error) {
+                    console.error("Stack:", error.stack);
+                }
+            }
+
+            return c.json({ message: "Failed to process notices" }, 500);
         }
     }
 );
 
-function parseDDMMYYYYToISO(ddmmyyyyHHMM: string): string {
-    if (!ddmmyyyyHHMM) return new Date().toISOString();
+// Generate structured notice from raw notice
+app.post(
+    "/structured-notices",
+    zValidator(
+        "json",
+        NoticeSchema.pick({
+            type: true,
+            category: true,
+            company: true,
+            noticeAt: true,
+            noticedBy: true,
+            noticeText: true,
+        })
+    ),
+    async (c) => {
+        try {
+            const rawNotice = c.req.valid("json");
 
-    const match = ddmmyyyyHHMM.match(
-        /^(\d{2})-(\d{2})-(\d{4}) (\d{2}):(\d{2})$/
-    );
-    if (!match) return new Date().toISOString();
+            const structured = await generateStructuredNotice(
+                c.env.GEN_AI_API_KEY,
+                rawNotice
+            );
 
-    const [, dd, mm, yyyy, hh, min] = match;
+            console.log(
+                "Structured notice generated:",
+                JSON.stringify(structured)
+            );
 
-    const d = new Date(
-        Date.UTC(
-            parseInt(yyyy),
-            parseInt(mm) - 1,
-            parseInt(dd),
-            parseInt(hh),
-            parseInt(min)
-        )
-    );
+            return c.json({ success: true });
+        } catch (error) {
+            console.error("Error generating structured notice:", error);
+            return c.json(
+                { success: false, error: (error as Error).message },
+                500
+            );
+        }
+    }
+);
 
-    return isNaN(d.getTime()) ? new Date().toISOString() : d.toISOString();
-}
+// Insert structured notices
+app.post(
+    "/insert-structured-notice",
+    zValidator("json", z.array(StructuredNoticeSchema)),
+    async (c) => {
+        try {
+            const structuredNotice = c.req.valid("json");
+
+            const db = drizzle(c.env.DB);
+
+            for (const notice of structuredNotice) {
+                console.log("Inserted notice for company:", notice.company);
+                await db.insert(structuredNotices).values(notice);
+            }
+
+            return c.json({
+                message: `${structuredNotice.length} structured notices inserted`,
+            });
+        } catch (error) {
+            if (error instanceof ZodError) {
+                const formattedErrors = error.errors.map((err, index) => {
+                    const pathStr = err.path.length > 0 ? err.path.join('.') : 'root';
+                    const isArrayItem = typeof err.path[0] === 'number';
+                    const itemIndex = isArrayItem ? err.path[0] : null;
+                    
+                    let message = err.message;
+                    if (itemIndex !== null) {
+                        message = `Item ${itemIndex}: ${message}`;
+                    }
+                    
+                    return {
+                        field: pathStr,
+                        message,
+                        code: err.code,
+                        ...(err.code === 'invalid_type' && {
+                            expected: err.expected,
+                            received: err.received
+                        }),
+                        ...(itemIndex !== null && { itemIndex })
+                    };
+                });
+                
+                console.error("Validation errors:", formattedErrors);
+                return c.json(
+                    {
+                        message: "Validation failed",
+                        errors: formattedErrors,
+                        totalErrors: error.errors.length
+                    },
+                    400
+                );
+            }
+
+            console.error("Error inserting structured notices:", error);
+            return c.json(
+                { message: "Failed to insert structured notices" },
+                500
+            );
+        }
+    }
+);
 
 export default app;

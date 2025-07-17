@@ -2,6 +2,8 @@ import {
     chromium,
     type Browser,
     type BrowserContext,
+    type BrowserType,
+    type ChromiumBrowser,
     type Page,
 } from "playwright";
 import type { Env } from "../types/hono.js";
@@ -28,20 +30,24 @@ export class ErpSession {
 
     public async init() {
         try {
-            this.browser = await chromium.launch({
-                headless: true,
-                timeout: 30000,
-            });
-            this.context = await this.browser.newContext({
-                viewport: { width: 1280, height: 720 },
-                userAgent:
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-            });
+            this.context = await chromium.launchPersistentContext(
+                "./playwright_data",
+                {
+                    headless: false,
+                    timeout: 30000,
+                }
+            );
+            // this.context = await this.browser.newContext({
+            //     viewport: { width: 1280, height: 720 },
+            //     userAgent:
+            //         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+            // });
             this.page = await this.context.newPage();
             console.log("Browser initialized successfully");
         } catch (error) {
             throw new Error(
-                `Failed to initialize browser: ${error instanceof Error ? error.message : String(error)
+                `Failed to initialize browser: ${
+                    error instanceof Error ? error.message : String(error)
                 }`
             );
         }
@@ -150,7 +156,8 @@ export class ErpSession {
         } catch (error) {
             console.error("Error closing browser:", error);
             throw new Error(
-                `Failed to close browser: ${error instanceof Error ? error.message : String(error)
+                `Failed to close browser: ${
+                    error instanceof Error ? error.message : String(error)
                 }`
             );
         }
