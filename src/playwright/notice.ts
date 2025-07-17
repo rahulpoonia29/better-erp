@@ -67,7 +67,10 @@ export class NoticeScraper {
                     }
 
                     // Parse dates using helper
-                    const noticeDate = new Date(noticeAt);
+                    // Parse date in DD-MM-YYYY HH:mm format
+                    const [datePart, timePart] = noticeAt.split(' ');
+                    const [day, month, year] = datePart.split('-');
+                    const noticeDate = new Date(`${year}-${month}-${day}T${timePart}`);
                     const lastKnownDate = new Date(this.LAST_NOTICE_AT);
 
                     console.log(
