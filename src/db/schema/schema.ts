@@ -9,4 +9,5 @@ export const notices = sqliteTable("notices", {
     noticeAt: text("notice_at").notNull(),
     noticedBy: integer("noticed_by").notNull(),
     noticeText: text("notice_text").notNull(),
+    documentUrl: text("document_url"), // Optional field for document links
 });

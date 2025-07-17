@@ -281,6 +281,7 @@ app.post(
                 noticeAt: true,
                 noticedBy: true,
                 noticeText: true,
+                documentUrl: true,
             })
         )
     ),
@@ -311,6 +312,7 @@ app.post(
                         noticeAt: parseDDMMYYYYToISO(notice.noticeAt),
                         noticedBy: notice.noticedBy,
                         noticeText: notice.noticeText,
+                        documentUrl: notice.documentUrl,
                     };
 
                     await db.insert(notices).values(formattedNotice);
@@ -462,12 +464,12 @@ app.post(
             //         const pathStr = err.path.length > 0 ? err.path.join('.') : 'root';
             //         const isArrayItem = typeof err.path[0] === 'number';
             //         const itemIndex = isArrayItem ? err.path[0] : null;
-                    
+
             //         let message = err.message;
             //         if (itemIndex !== null) {
             //             message = `Item ${itemIndex}: ${message}`;
             //         }
-                    
+
             //         return {
             //             field: pathStr,
             //             message,
@@ -479,7 +481,7 @@ app.post(
             //             ...(itemIndex !== null && { itemIndex })
             //         };
             //     });
-                
+
             //     console.error("Validation errors:", formattedErrors);
             //     return c.json(
             //         {
